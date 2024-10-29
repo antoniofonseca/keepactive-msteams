@@ -21,3 +21,7 @@ chmod +x keep_active.sh
  ```
  tail -f /tmp/keep_active.log
  ```
+
+ ## License
+
+This script is licensed under the [MIT License](LICENSE).
