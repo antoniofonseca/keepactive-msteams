@@ -2,8 +2,8 @@
 """
 Script to keep the Microsoft Teams window active.
 
-This script continuously checks for a window with a specific name (Microsoft Teams) 
-and simulates mouse movements to keep the window active. It also checks for the 
+This script continuously checks for a window with a specific name (Microsoft Teams)
+and simulates mouse movements to keep the window active. It also checks for the
 existence of a control file to gracefully stop the script.
 
 Dependencies:
@@ -18,7 +18,7 @@ Usage:
 2. Make the script executable (optional):
     chmod +x keep_active.py
 3. Run the script:
-    ./keep_active.py
+    ./keep_active.py [--interval SECONDS]
 """
 
 import os
@@ -29,7 +29,8 @@ import subprocess
 import sys
 import curses
 import threading
-from datetime import datetime, timedelta
+import argparse
+from datetime import datetime
 from random import randint
 
 # Constants
@@ -52,12 +53,17 @@ interval = DEFAULT_INTERVAL
 start_time = None
 paused_time = None
 
+# Event to synchronize status updates
+status_updated = threading.Event()
+
 # Check for xdotool dependency
-try:
-    subprocess.run(['xdotool', '--version'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-except FileNotFoundError:
-    print("Error: xdotool is not installed. Please install it using 'sudo apt-get install xdotool'")
-    sys.exit(1)
+def check_dependencies():
+    """Check if xdotool is installed."""
+    try:
+        subprocess.run(['xdotool', '--version'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except FileNotFoundError:
+        print("Error: xdotool is not installed. Please install it using 'sudo apt-get install xdotool'")
+        sys.exit(1)
 
 def find_window_id(window_name):
     """Find the window ID for the given window name using xdotool."""
@@ -145,12 +151,13 @@ def modify_interval(stdscr):
     stdscr.refresh()
     stdscr.getch()
 
-def start_script(stdscr):  # No `self` argument here
+def start_script(stdscr):
     """Start the script to keep the MS Teams window active."""
     global is_running, interval, start_time
     logging.info("Starting script...")
     is_running = True
     start_time = datetime.now()  # Reset start_time when starting
+    status_updated.set()  # Notify that the status has been updated
 
     while is_running and not os.path.isfile(CONTROL_FILE):
         logging.info("Checking for stop file...")
@@ -167,6 +174,8 @@ def start_script(stdscr):  # No `self` argument here
             interact_with_window(window_id)
         else:
             logging.info("Window not found!")
+            stdscr.addstr(12, 0, "Microsoft Teams window not found. Retrying...")
+            stdscr.refresh()
 
         # Wait for the defined interval
         for _ in range(interval):
@@ -201,8 +210,14 @@ def update_elapsed_time(stdscr):
 
 def menu(stdscr):
     """Display a simple text-based menu for user interaction."""
-    global is_running, interval, is_paused, paused_time, elapsed_time_before_pause
+    global is_running, interval, is_paused, paused_time
     curses.curs_set(0)
+
+    # Initialize colors
+    curses.start_color()
+    curses.init_pair(1, curses.COLOR_GREEN, curses.COLOR_BLACK)
+    curses.init_pair(2, curses.COLOR_RED, curses.COLOR_BLACK)
+    curses.init_pair(3, curses.COLOR_YELLOW, curses.COLOR_BLACK)
 
     # Start the elapsed time updater thread
     elapsed_time_thread = threading.Thread(target=update_elapsed_time, args=(stdscr,), daemon=True)
@@ -210,7 +225,7 @@ def menu(stdscr):
 
     while True:
         stdscr.clear()
-        stdscr.addstr(0, 0, "Choose an action:")
+        stdscr.addstr(0, 0, "Choose an action:", curses.color_pair(1))
         stdscr.addstr(1, 0, "1. Start Script - Begin the process to keep the MS Teams window active.")
         stdscr.addstr(2, 0, "2. Stop Script - Stop the script by creating the control file.")
         stdscr.addstr(3, 0, "3. Display Log - Show the current log content.")
@@ -221,12 +236,15 @@ def menu(stdscr):
         # Determine the current status string
         if is_paused and is_running:
             status_str = "Running (Paused)"
+            status_color = curses.color_pair(3)
         elif is_running:
             status_str = "Running"
+            status_color = curses.color_pair(1)
         else:
-            status_str = "Stopped"  # Prioritize "Stopped" when not running
+            status_str = "Stopped"
+            status_color = curses.color_pair(2)
 
-        stdscr.addstr(8, 0, f"Current Status: {status_str}")
+        stdscr.addstr(8, 0, f"Current Status: {status_str}", status_color)
         stdscr.addstr(9, 0, f"Current Interval: {interval} seconds")
         stdscr.addstr(11, 0, f"Elapsed Time: {get_elapsed_time()}")
 
@@ -236,19 +254,21 @@ def menu(stdscr):
 
         if choice == ord('1'):
             if is_running:
-                stdscr.addstr(12, 0, "The script is already running.")
+                stdscr.addstr(12, 0, "The script is already running.", curses.color_pair(3))
             else:
-                stdscr.addstr(12, 0, "Starting script...")
+                stdscr.addstr(12, 0, "Starting script...", curses.color_pair(1))
                 stdscr.refresh()
                 threading.Thread(target=start_script, args=(stdscr,)).start()
+                status_updated.wait()  # Wait until the status is updated
+                status_updated.clear()  # Reset the event for the next use
 
         elif choice == ord('2'):
             if not is_running:
-                stdscr.addstr(12, 0, "The script is not running.")
+                stdscr.addstr(12, 0, "The script is not running.", curses.color_pair(3))
             else:
                 with open(CONTROL_FILE, 'w') as f:
                     pass
-                stdscr.addstr(12, 0, "Stop file created. Script will stop soon.")
+                stdscr.addstr(12, 0, "Stop file created. Script will stop soon.", curses.color_pair(1))
             stdscr.refresh()
             time.sleep(2)
 
@@ -265,30 +285,30 @@ def menu(stdscr):
                     paused_time = datetime.now()
                 else:
                     paused_time = None
-                stdscr.addstr(12, 0, f"Script {'paused' if is_paused else 'resumed'}.")
+                stdscr.addstr(12, 0, f"Script {'paused' if is_paused else 'resumed'}.", curses.color_pair(1))
             else:
-                stdscr.addstr(12, 0, "Script is not running. Cannot pause/resume.")
+                stdscr.addstr(12, 0, "Script is not running. Cannot pause/resume.", curses.color_pair(3))
             stdscr.refresh()
             time.sleep(2)
 
         elif choice == ord('6'):
             if is_running:
-                stdscr.addstr(12, 0, "The script is running. Please stop it first.")
+                stdscr.addstr(12, 0, "The script is running. Please stop it first.", curses.color_pair(3))
                 stdscr.addstr(13, 0, "Press 's' to stop and exit, or any other key to return to the menu.")
                 stdscr.refresh()
                 confirm_exit = stdscr.getch()
                 if confirm_exit == ord('s'):
                     with open(CONTROL_FILE, 'w') as f:
                         pass
-                    stdscr.addstr(14, 0, "Stop file created. Script will stop soon.")
+                    stdscr.addstr(14, 0, "Stop file created. Script will stop soon.", curses.color_pair(1))
                     is_running = False
                     stdscr.refresh()
                     time.sleep(2)
-                    stop_script(None, None) # Stop the main script
+                    stop_script(None, None)  # Stop the main script
                     elapsed_time_thread.join()  # Wait for the elapsed time thread to finish
                     break  # Exit the menu loop
             else:
-                stdscr.addstr(12, 0, "Exiting. The script will stop.")
+                stdscr.addstr(12, 0, "Exiting. The script will stop.", curses.color_pair(1))
                 stdscr.refresh()
                 time.sleep(2)
                 stop_script(None, None)  # Stop the main script
@@ -296,9 +316,23 @@ def menu(stdscr):
                 break  # Exit the menu loop
 
         else:
-            stdscr.addstr(12, 0, "Invalid choice. Please try again.")
+            stdscr.addstr(12, 0, "Invalid choice. Please try again.", curses.color_pair(3))
             stdscr.refresh()
             time.sleep(2)
 
+def parse_arguments():
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(description="Keep Microsoft Teams window active.")
+    parser.add_argument(
+        "--interval",
+        type=int,
+        default=DEFAULT_INTERVAL,
+        help="Interval in seconds between interactions (default: 300)"
+    )
+    return parser.parse_args()
+
 if __name__ == "__main__":
+    check_dependencies()
+    args = parse_arguments()
+    interval = args.interval
     curses.wrapper(menu)
